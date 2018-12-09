@@ -1,1 +1,59 @@
+#include <stdio.h>
+#include <pwd.h>
+#include <stdlib.h>
+#define max 1024
+
+struct passwd *pwd;
+
+void yaush(void);
+void display_on_screen(char *prompt);
+
+int main(){
+	
+	yaush();
+	return 0;
+}
+
+void yaush(void){
+	
+	char prompt[1024];
+	
+	display_on_screen(prompt);//shell 的前缀
+	
+	
+}
+
+void display_on_screen(char *prompt){// [yaush]用户@主机名：路径$
+	extern struct passwd *pwd;
+	char hostname[256];
+	char pathname[1024];
+	int l;
+	pwd =getpwuid(getuid());//用户名
+	getcwd(pathname,1024);//路径
+
+	if(gethostname(hostname,256)==0)//获得用户名和主机名
+		sprintf(prompt,"[yaush]%s@%s:",pwd->pw_name,hostname);
+	else
+		sprintf(prompt,"[yaush]%s@unknown:",pwd->pw_name);
+
+	l = strlen(prompt);
+
+	if(strlen(pathname) < strlen(pwd->pw_dir) || strncmp(pathname,pwd->pw_dir,
+	   strlen(pwd->pw_dir))!=0)//获得路径
+		sprintf(prompt+l,"%s",pathname);//此目录为home目录，home路径不省略
+	else
+		sprintf(prompt+l,"~%s",pathname+strlen(pwd->pw_dir));//省略home路径
+
+	l=strlen(prompt);
+
+	if(geteuid() == 0)//检查是否是root
+		sprintf(prompt+l,"#");//root
+	else
+		sprintf(prompt+l,"$");//comm
+	//puts(pwd->pw_dir); /home/linzq18/homework/big_homework
+	//puts(pathname);  /home/linzq18
+	//puts(prompt);
+
+	return ;
+}
 
