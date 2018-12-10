@@ -5,6 +5,7 @@
 #include <string.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <readline/.h>
 
 #define max 1024
 
@@ -17,7 +18,7 @@ int read_order(char **order,char **para,char *prompt);
 
 
 int main(){
-	
+
 	yaush();
 	return 0;
 }
@@ -26,8 +27,9 @@ void yaush(void){
 	
 	char prompt[1024];
 	char *order = NULL;
-	int panum;
+	int panum,i;
 	char **para;
+	pid_t pid;
 
 	para = malloc(sizeof(char *)*22);
 	buffer = malloc(sizeof(char) * 4096);
@@ -38,15 +40,27 @@ void yaush(void){
 	}
 
 	while(1){
-		display_on_screen(prompt);//shell的前缀
+		display_on_screen(prompt);//shell 的前缀
 		panum = read_order(&order,para,prompt);
 		
 		if(panum == -1){
 			continue;
 		}
 
+		if((pid = fork()) > 0){//主进程
+			//printf("fu jin chneg\n");
+			wait(pid,NULL,0);
 
+		}
 
+		else{//zi jin cheng
+			i=execvp(order,para);
+			if(i=-1){
+				printf("未找到命令\n");			
+			}
+			
+			exit(0);
+		}
 	}
 }
 
@@ -55,8 +69,11 @@ int read_order(char **order,char **para,char *prompt){
 	char *p;
 	
 	free(buffer);
-	
+
+	//rl_attlempted_completion_fuction = cmdCompletion;
+	//get_begidx();
 	buffer = readline(prompt);
+	add_history(buffer);//
 	if(feof(stdin)!=0){
 		printf("\n");
 		exit(0);
@@ -131,10 +148,10 @@ int read_order(char **order,char **para,char *prompt){
 
 	}
 
-	para[count-1] = NULL;
+	para[count-1] = NULL;//execvp最后一位必须为空
 
-	printf("%s\n",*order);
-	for(i=0;i<3;i++){printf("%s\n",para[i]);}
+	//printf("%s\n",*order);
+	//for(i=0;i<3;i++){printf("%s\n",para[i]);}
 	//printf("%d \n",count);
 	return count;
 }
