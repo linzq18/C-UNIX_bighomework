@@ -1,12 +1,20 @@
 #include <stdio.h>
 #include <pwd.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <readline/readline.h>
+#include <readline/history.h>
+
 #define max 1024
 
 struct passwd *pwd;
+char *buffer;
 
 void yaush(void);
 void display_on_screen(char *prompt);
+int read_order(char **order,char **para,char *prompt);
+
 
 int main(){
 	
@@ -17,10 +25,118 @@ int main(){
 void yaush(void){
 	
 	char prompt[1024];
+	char *order = NULL;
+	int panum;
+	char **para;
+
+	para = malloc(sizeof(char *)*22);
+	buffer = malloc(sizeof(char) * 4096);
+
+	if(para == NULL || buffer == NULL){
+		printf("malloc error.\n");
+		return ;
+	}
+
+	while(1){
+		display_on_screen(prompt);//shell的前缀
+		panum = read_order(&order,para,prompt);
+		
+		if(panum == -1){
+			continue;
+		}
+
+
+
+	}
+}
+
+int read_order(char **order,char **para,char *prompt){
+	char *buffer;
+	char *p;
 	
-	display_on_screen(prompt);//shell 的前缀
+	free(buffer);
 	
+	buffer = readline(prompt);
+	if(feof(stdin)!=0){
+		printf("\n");
+		exit(0);
+	}
 	
+	if(buffer[0] == '\0') { 
+		//printf("buffer is NULL"); 
+		return -1;//输入为空
+	}
+	
+	int i;
+	//for(i=0;i<10;i++){printf("%d %c",buffer[i],buffer[i]);}
+	
+	char *ps,*pe;//每两个空格之间单词的头尾指针
+	int flag=0;//表示是否完成了对输入的命令进行划分
+	int count=0;
+	ps=pe=buffer;
+
+	while(flag==0){
+		//printf("\n1\n");
+		while(*ps == ' ' || *ps == '\t'){//排除输入的空格
+			ps++;
+			pe++;
+		}
+
+		if(*pe == '\0' || *pe == '\n'){
+			if(count == 0)
+				return -1;
+			break;
+		}
+
+		while(*pe != ' ' && *pe != '\0' && *pe != '\n')//在两个空格之间查找单词
+			*pe++;
+		//printf("%c\n",pe[]);
+
+		if(count == 0){
+			p=pe;
+			//printf("%d \n",*p);
+			*order = ps;
+			//printf("%d \n",*ps);		
+			while(p != ps && *p != '/')
+				p--;
+
+			//printf("%d \n",*p);
+
+			if(*p == '/')
+				p++;
+
+			para[0] = p;
+			//printf("%d \n",*p);
+			count = count+2;
+
+		}
+		else if(count<=20){
+			para[count-1] = ps;
+			count++;
+		}
+		else{
+			break;	
+		}
+
+		
+		if(*pe == '\0' || *pe == '\n'){
+			*pe = '\0';
+			flag = 1;
+		}
+		else{
+			*pe = '\0';
+			pe++;
+			ps = pe;
+		}
+
+	}
+
+	para[count-1] = NULL;
+
+	printf("%s\n",*order);
+	for(i=0;i<3;i++){printf("%s\n",para[i]);}
+	//printf("%d \n",count);
+	return count;
 }
 
 void display_on_screen(char *prompt){// [yaush]用户@主机名：路径$
@@ -47,13 +163,12 @@ void display_on_screen(char *prompt){// [yaush]用户@主机名：路径$
 	l=strlen(prompt);
 
 	if(geteuid() == 0)//检查是否是root
-		sprintf(prompt+l,"#");//root
+		sprintf(prompt+l,"# ");//root
 	else
-		sprintf(prompt+l,"$");//comm
+		sprintf(prompt+l,"$ ");//comm
 	//puts(pwd->pw_dir); /home/linzq18/homework/big_homework
 	//puts(pathname);  /home/linzq18
 	//puts(prompt);
 
 	return ;
 }
-
