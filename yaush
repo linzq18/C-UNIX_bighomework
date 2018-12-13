@@ -5,21 +5,40 @@
 #include <string.h>
 #include <readline/readline.h>
 #include <readline/history.h>
-#include <readline/.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #define max 1024
 
+#define BACK 1
+#define IN_DIR 2
+#define OUT_DIR 4
+#define OUT_DIR_ADD 8
+#define PIPE 16
+struct analyze_info{
+	int flag;
+	char* in_file;
+	char* out_file;
+	char** para2;
+	char* order2;
+};
+
 struct passwd *pwd;
 char *buffer;
-
+pid_t PID[max];//fujincheng
 
 void yaush(void);
 void display_on_screen(char *prompt);
 int read_order(char **order,char **para,char *prompt);
-
+int analyze_order(char **para,int panum,struct analyze_info *info);
 
 int main(){
+	int i;
 	
+	for(i=0;i<max;i++)
+		PID[max] = 0;
+
 	yaush();
 	return 0;
 }
@@ -31,7 +50,7 @@ void yaush(void){
 	int panum,i;
 	char **para;
 	struct analyze_info info;
-	pid_t pid;
+	pid_t pid1,pid2;
 
 	para = malloc(sizeof(char *)*22);
 	buffer = malloc(sizeof(char) * 4096);
@@ -42,18 +61,20 @@ void yaush(void){
 	}
 
 	while(1){
-		int fd[2];
+		int fd[2],out_fd;
 		display_on_screen(prompt);//shell 的前缀
 		panum = read_order(&order,para,prompt);
 
+	//printf("3\n");
 		if(panum == -1){//未读到指令
 			continue;
 		}
 
-		para = para - 1;
+		panum = panum - 1;//因为最后一位为NULL，所以要para-1
+
 		analyze_order(para,panum,&info);//分析是否输入中有重定向和管道
 		
-		if( info.flag == PIPE){//sheng cheng pipe
+		if( info.flag == PIPE){//判断是否有 pipe 指令，并生成管道
 			if(pipe(fd)<0){
 				printf("pipe error\n");
 				exit(0);
@@ -62,18 +83,69 @@ void yaush(void){
 		
 		
 
-		if((pid = fork()) > 0){//主进程
+		if((pid1 = fork()) > 0){//主进程
 			//printf("fu jin chneg\n");
-			wait(pid,NULL,0);
+			
+			//printf("%d \n",info.flag);
+			if(info.flag == PIPE){
+				//printf("%123 \n");
+				if((pid2 = fork()) == 0){//pipe 执行|之后的命令
+					close(fd[1]);
+					close(STDIN_FILENO);
+					dup2(fd[0],STDIN_FILENO);
+					close(fd[0]);
+					execvp(info.order2,info.para2);
+				}
+				else{//pid2的父进程
+					close(fd[0]);
+					close(fd[1]);
+					wait(pid2,NULL,0);
+					
+				}
+
+			}
+			//printf("child finish\n");
+			wait(pid1,NULL,0);
 
 		}
 
-		else{//子进程
+		else{//子进程 order1 ，如果有|符号，只执行|符号之前的语句，并将结果送入管道里
+			//printf("zi jin chneg\n");
+			if(info .flag = PIPE){
+				if(!(info.flag == OUT_DIR) && !(info.flag == OUT_DIR_ADD)){//pipe只起到链接作用
+					close(fd[0]);
+					close(STDOUT_FILENO);//关闭标准输出
+					dup2(fd[1],STDOUT_FILENO);//将order1输出送入指向的管道fd[1]里，后面参数和前面参数指向一个地方
+					close(fd[1]);
+				}
+				else{//管道 之前有文件相关操作
+					close(fd[0]);
+					close(fd[1]);
+					if(info.flag == OUT_DIR){
+						out_fd = open(info.out_file,O_WRONLY|O_CREAT|O_TRUNC,0666);
+					}
+					else{
+						out_fd = open(info.out_file,O_WRONLY|O_APPEND|O_TRUNC,0666);
+
+					}
+
+					close(STDOUT_FILENO);
+					dup2(out_fd,STDOUT_FILENO);
+					close(out_fd);
+
+				}			
+			}
+			//else{
+
+
+
+			//}
+
 			i=execvp(order,para);
 			if(i=-1){
 				printf("未找到命令，请重新输入\n");			
 			}
-			
+			//printf("child finish\n");
 			exit(0);
 		}
 	}
@@ -81,19 +153,19 @@ void yaush(void){
 
 
 
-void analyze_order(char **para,int panum,analyze_info *info){
+int analyze_order(char **para,int panum,struct analyze_info *info){
 	char* p;
 	int i;
-	info -> flag = NULL;
-	info -> in_file = NULL;
-	info -> out_file = NULL;
-	info -> order2 = NULL;
-	info ->para2 = NULL;
+	info->flag = 0;
+	info->in_file = NULL;
+	info->out_file = NULL;
+	info->order2 = NULL;
+	info->para2 = NULL;
 
-	if(strcmp(para[paunm]))
+	//if(strcmp(para[panum]))
 
-	for(i=0;i<para;){//在每一个para[i]中查找是否有重定向和管道的输入符
-		if(strcmp ( para[i],"<<") == 0) ||strcmp ( para[i],"<" ) == 0){
+	for(i=0;i<panum;){//在每一个para[i]中查找是否有重定向和管道的输入符
+		if(strcmp ( para[i],"<<") == 0 ||strcmp ( para[i],"<" ) == 0){
 			info->flag = IN_DIR;
 			info->in_file = para[i+1];
 			para[i] = NULL;
@@ -116,15 +188,15 @@ void analyze_order(char **para,int panum,analyze_info *info){
 			info->flag = PIPE;
 			para[i] = NULL;
 			info -> order2 = para[i+1];
-			info ->para2 = &para[i+1];
+			info -> para2 = &para[i+1];
 
-			for(p = info->para2[0] + strlen(info->para2[0]);p != &(info->para[0][0]) 
+			for(p = info->para2[0] + strlen(info->para2[0]);p != &(info->para2[0][0]) 
 				&& *p !='/';p--)//判断是否在管道 | 符号之后有/
 				;
 
-			if(p == '/')
+			if(*p == '/')
 				p++;
-			info->para[0] = p;
+			info->para2[0] = p;
 			break;
 		}
 		else
@@ -219,12 +291,11 @@ int read_order(char **order,char **para,char *prompt){
 		}
 
 	}
-
+//printf("%d \n",count);
 	para[count-1] = NULL;//execvp zui hou yi wei bi xu wei kong
-
-	//printf("%s\n",*order);
-	//for(i=0;i<3;i++){printf("%s\n",para[i]);}
-	//printf("%d \n",count);
+//	printf("%s\n",*order);
+	//for(i=0;i<count-1;i++){printf("%s\n",para[i]);}
+//	printf("%d \n",count);
 	return count;
 }
 
