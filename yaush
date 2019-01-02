@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <signal.h>
 
 #define max 1024
 
@@ -16,6 +18,12 @@
 #define OUT_DIR 4
 #define OUT_DIR_ADD 8
 #define PIPE 16
+
+//#define CLOSE "\001\033[0m\002"
+//#define BEGIN(x,y) "\001\033["#x";"#y"m\002"
+
+//extern HIST_ENTRY **history_list RARAMS((void));
+
 struct analyze_info{
 	int flag;
 	char* in_file;
@@ -26,25 +34,28 @@ struct analyze_info{
 
 struct passwd *pwd;
 char *buffer;
-pid_t PID[max];//fujincheng
+pid_t PID[max];//后台执行的进程，默认上限为1024
+char *HIS[20];
 
 void yaush(void);
 void display_on_screen(char *prompt);
 int read_order(char **order,char **para,char *prompt);
 int analyze_order(char **para,int panum,struct analyze_info *info);
+void handle(int sig);
+void show_history(int hisnum);
+int builtin(char *order,char **para);
 
 int main(){
 	int i;
-	
-	for(i=0;i<max;i++)
+	for(i=0;i<max;i++){//初始化后台运行进程表
 		PID[max] = 0;
+	}
 
 	yaush();
 	return 0;
 }
 
 void yaush(void){
-	
 	char prompt[1024];
 	char *order = NULL;
 	int panum,i;
@@ -55,25 +66,38 @@ void yaush(void){
 	para = malloc(sizeof(char *)*22);
 	buffer = malloc(sizeof(char) * 4096);
 
-	if(para == NULL || buffer == NULL){
+	if(para == NULL || buffer == NULL){//判断命令和缓存是否不存在
 		printf("malloc error.\n");
 		return ;
 	}
+	
+	if(signal(SIGCHLD,handle) == SIG_ERR){//(SIGCHLD)当子进程终止或结束时，触发handle函数
+		printf("signal error");
+	}
+	read_history(NULL);//读取历史命令记录
 
 	while(1){
-		int fd[2],out_fd,in_fd;
+		int fd[2],out_fd,in_fd,l;
+		
+		HIST_ENTRY **his_t;
+		his_t = history_list();
+
 		display_on_screen(prompt);//shell 的前缀
-		panum = read_order(&order,para,prompt);
+		panum = read_order(&order,para,prompt);//将读入的指令进行分解，返回几个指令
 
 		if(panum == -1){//未读到指令
 			continue;
 		}
-
+		
+		if(builtin(order,para)){//内建命令判断，如果是内建命令直接执行
+			continue;
+		}
+		
 		panum = panum - 1;//因为最后一位为NULL，所以要para-1
 
-		analyze_order(para,panum,&info);//分析是否输入中有重定向和管道
+		analyze_order(para,panum,&info);//分析是否输入命令中有重定向和管道
 		//printf("%d %d\n",info.flag,info.out_file);
-		if( info.flag == PIPE){//判断是否有 pipe 指令，并生成管道
+		if( info.flag & PIPE){//判断是否有 pipe 指令，并生成管道
 			if(pipe(fd)<0){
 				printf("pipe error\n");
 				exit(0);
@@ -82,8 +106,8 @@ void yaush(void){
 
 		if((pid1 = fork()) > 0){//主进程
 			//printf("fu jin chneg\n");
-			if(info.flag == PIPE){
-				if((pid2 = fork()) == 0){//pipe 执行|之后的命令
+			if(info.flag & PIPE){
+				if((pid2 = fork()) == 0){//pipe 执行|之后的命令即order2
 					close(fd[1]);
 					close(STDIN_FILENO);
 					dup2(fd[0],STDIN_FILENO);
@@ -98,24 +122,46 @@ void yaush(void){
 				}
 
 			}
-			//printf("child finish\n");
-			wait(pid1,NULL,0);
+
+			if(info.flag & BACK){//后台运行，即没有else中的wait直接等待命令输入
+				int k;
+				for(k=0;k<max;k++){
+					if(PID[k] == 0){
+						PID[k] = pid1;
+						printf("[%d] %u\n",k+1,pid1);
+						
+						l=0;
+						while(his_t[l] != 0){
+							l++;
+						}
+						l=l-1;
+						HIS[k]=his_t[l]->line;
+						break;
+					}
+				}
+				if(k == max){
+					printf("后台进程数达到上限");
+				}
+			}
+
+			else{
+				wait(pid1,NULL,0);
+			}
 
 		}
-
 		else{//子进程 order1 ，如果有|符号，只执行|符号之前的语句，并将结果送入管道里
 			//printf("zi jin chneg\n");
-			if(info .flag == PIPE){//处理管道符号之前的语句
-				if(!(info.flag == OUT_DIR) && !(info.flag == OUT_DIR_ADD)){//pipe只起到链接作用
+			if(info .flag & PIPE){//处理管道符号之前的语句
+				if(!(info.flag & OUT_DIR) && !(info.flag & OUT_DIR_ADD)){//pipe只起到链接作用
 					close(fd[0]);
 					close(STDOUT_FILENO);//关闭标准输出
 					dup2(fd[1],STDOUT_FILENO);//将order1输出送入指向的管道fd[1]里，后面参数和前面参数指向一个地方
 					close(fd[1]);
 				}
-				else{//管道 之前有文件相关操作
+				else{//管道 有文件相关操作
 					close(fd[0]);
 					close(fd[1]);
-					if(info.flag == OUT_DIR){
+					if(info.flag & OUT_DIR){
 						out_fd = open(info.out_file,O_WRONLY|O_CREAT|O_TRUNC,0666);
 					}
 					else{
@@ -130,19 +176,19 @@ void yaush(void){
 				}			
 			}
 			else{//看是否重定向输出
-				if(info.flag == OUT_DIR){//输出重定向
+				if(info.flag & OUT_DIR){//输出重定向
 					out_fd = open(info.out_file,O_WRONLY|O_CREAT|O_TRUNC,0666);
 					close(STDOUT_FILENO);
 					dup2(out_fd,STDOUT_FILENO);
 					close(out_fd);
 				}
-				if(info.flag == OUT_DIR_ADD){//输出重定向追加
+				if(info.flag & OUT_DIR_ADD){//输出重定向追加
 					out_fd = open(info.out_file,O_WRONLY|O_CREAT|O_APPEND,0666);
 					close(STDOUT_FILENO);
 					dup2(out_fd,STDOUT_FILENO);
 					close(out_fd);
 				}
-				if(info.flag == IN_DIR){//输入重定向
+				if(info.flag & IN_DIR){//输入重定向
 				in_fd = open(info.in_file,O_CREAT|O_RDONLY,0666);
 				close(STDIN_FILENO);
 				dup2(in_fd,STDIN_FILENO);
@@ -153,51 +199,215 @@ void yaush(void){
 
 			
 			i=execvp(order,para);
-			if(i=-1){
+
+			if(i==-1){
 				printf("未找到命令，请重新输入\n");			
 			}
 			exit(0);
 		}
+		
 	}
+	
 	free(para);
 	free(buffer);
 }
+int builtin(char *order,char **para){
+	int hisnum,i,jobs_last,l,flag;
+	if(strcmp(order,"q") == 0){//输入q退出
+		exit(0);
+	}
 
+	if(strcmp(order,"his") == 0 || strcmp(order,"history") == 0){//历史命令
+		if(para[1] != NULL){//有参数
+			hisnum =atoi(para[1]);
+			//printf("hisnum %d\n",hisnum);
+			show_history(hisnum);
+		}
+		else {//无参数
+			hisnum =0;
+			show_history(hisnum);
+		}
+		return 1;
+	}
 
+	if(strcmp(order,"jobs") == 0){//打印后台在运行的程序
+		for(i=20,flag=0;i>=0;i--){
+			if(PID[i] != 0){
+				jobs_last=i+1;
+				
+				if(jobs_last == 1){
+					//signal(SIGCHLD,)
+					printf("[%d]+  	运行中		%s\n",jobs_last,HIS[jobs_last-1]);
+					return 1;
+				}	
+				else if(jobs_last == 2){
+					//flag=1;
+					//signal(SIGCHLD,)
+					if(PID[i-1] != 0)
+						printf("[%d]-  	运行中		%s\n",jobs_last-1,HIS[jobs_last-2]);
+					printf("[%d]+  	运行中		%s\n",jobs_last,HIS[jobs_last-1]);
+					return 1;
+				}
+				else{
+					for(l=jobs_last-2;l>=0;l--){
+						if(PID[l] != 0){
+							flag=l;
+							break;			
+						}
+					}
+				//printf("jobs 3\n");
+					for(i=0;i<=jobs_last-2;i++){
+						
+						if(PID[i] != 0){
+							//printf("[%d]  	运行中	%s\n",i+1,HIS[i]);
+							if(i == flag){
+								printf("[%d]-  	运行中		%s\n",i+1,HIS[i]);
+							}
+							else{
+								printf("[%d]  	运行中		%s\n",i+1,HIS[i]);
+								}
+						}
+					}
+
+					printf("[%d]+  	运行中	%s\n",jobs_last,HIS[jobs_last-1]);
+					return 1;
+				}	
+			}
+
+		}
+		return 1;
+	}
+
+		/*if(jobs_last == 0){//wu hou tai cheng xu
+			return 1;
+		}
+		else if(jobs_last == 1){
+			//signal(SIGCHLD,)
+			printf("[%d]+  	运行中	%s\n",jobs_last,HIS[jobs_last-1]);
+			return 1;
+		}	
+		else if(jobs_last == 2){
+			//signal(SIGCHLD,)
+			printf("[%d]-  	运行中	%s\n",jobs_last-1,HIS[jobs_last-2]);
+			printf("[%d]+  	运行中	%s\n",jobs_last,HIS[jobs_last-1]);
+			return 1;
+		}
+		else{
+
+			//signal(SIGCHLD,)
+			//printf("jobs_last %d\n",jobs_last);
+			for(i=0;i<=jobs_last-3;i++){
+				printf("[%d]  	运行中	%s\n",i+1,HIS[i]);
+			}
+			printf("[%d]-  	运行中	%s\n",jobs_last-1,HIS[jobs_last-2]);
+			printf("[%d]+  	运行中	%s\n",jobs_last,HIS[jobs_last-1]);
+			return 1;
+		}*/	
+	if(strcmp(order,"fg") == 0){
+		for(i=20;i>=0;i--){
+			if(PID[i] == 0 && i==0){
+				printf("yaush: fg 当前：无此任务\n");
+			}
+			else if(PID[i]!=0){
+				
+				return 1;			
+			}
+		}
+
+		return 1;
+	}
+
+	return 0;
+}
+void show_history(int hisnum){//显示历史命令
+	int i=0;
+	HIST_ENTRY **his;
+	his = history_list();
+	if(hisnum == 0){
+		while(his[i] != 0){
+			printf(" %d  %s\n",i,his[i]->line);
+			i++;
+		}
+	}
+	else{
+		while(his[i] != 0){
+			i++;
+		}
+		i = i-hisnum;
+		while(hisnum){
+			printf(" %d  %s\n",i,his[i]->line);
+			i++;
+			hisnum--;
+		}
+	}
+}
+
+void handle(int sig){
+	pid_t pid;
+	int i,l;
+	for(i=0;i<max;i++){
+		if(PID[i] != 0){
+			pid = waitpid(PID[i],NULL,WNOHANG);//没有结束返回0,结束了返回子进程号
+			if(pid>0){
+				/*for(l=20;l>=0;l--){
+					if(PID[l] != 0)
+						break;
+				}
+				//printf("process %d exited.\n",pid);
+				if(i == l)
+					printf("[%d]+  已完成		%s\n",i+1,HIS[i]);
+				else */
+				printf("[%d]  已完成		%s\n",i+1,HIS[i]);
+
+				HIS[i]=0;
+				PID[i]=0;
+			}
+			else if(pid<0){
+				if(errno != ECHILD)
+					printf("waitpid error\n");
+			}
+		}
+	}
+	return ;
+}
 
 int analyze_order(char **para,int panum,struct analyze_info *info){
 	char* p;
-	int i;
+	int i,l;
 	info->flag = 0;
 	info->in_file = NULL;
 	info->out_file = NULL;
 	info->order2 = NULL;
 	info->para2 = NULL;
 
-	//if(strcmp(para[panum]))
+
+	if(strcmp(para[panum-1],"&") == 0){//查看是否有后台运行的指令
+		info->flag |= BACK;
+		para[panum-1]= NULL;
+		panum= panum -1;
+	}
 
 	for(i=0;i<panum;){//在每一个para[i]中查找是否有重定向和管道的输入符
 		if(strcmp ( para[i],"<<") == 0 ||strcmp ( para[i],"<" ) == 0){
-			info->flag = IN_DIR;
+			info->flag |= IN_DIR;
 			info->in_file = para[i+1];
 			para[i] = NULL;
 			i=i+2;
 		}
 		else if(strcmp(para[i],">") == 0){
-			info->flag = OUT_DIR;//printf("you > \n");
+			info->flag |= OUT_DIR;
 			info->out_file = para[i+1];
 			para[i] = NULL;
 			i=i+2;
 		}
 		else if(strcmp(para[i],">>") == 0){
-			info->flag = OUT_DIR_ADD;
+			info->flag |= OUT_DIR_ADD;
 			info->out_file = para[i+1];
 			para[i] = NULL;
 			i=i+2;
 		}
 		else if(strcmp(para[i],"|") == 0){
-
-			info->flag = PIPE;
+			info->flag |= PIPE;
 			para[i] = NULL;
 			info -> order2 = para[i+1];
 			info -> para2 = &para[i+1];
@@ -229,7 +439,11 @@ int read_order(char **order,char **para,char *prompt){
 	//rl_attlempted_completion_fuction = cmdCompletion;
 	//get_begidx();
 	buffer = readline(prompt);
+
+	
 	add_history(buffer);//
+	write_history(NULL);
+
 	if(feof(stdin)!=0){
 		printf("\n");
 		exit(0);
@@ -240,7 +454,7 @@ int read_order(char **order,char **para,char *prompt){
 		return -1;//输入为空
 	}
 	
-	int i;
+	//int i;
 	//for(i=0;i<10;i++){printf("%d %c",buffer[i],buffer[i]);}
 	
 	char *ps,*pe;//每两个空格之间单词的头尾指针
@@ -303,8 +517,7 @@ int read_order(char **order,char **para,char *prompt){
 		}
 
 	}
-//printf("%d \n",count);
-	para[count-1] = NULL;//execvp zui hou yi wei bi xu wei kong
+	para[count-1] = NULL;//execvp 最后一位必须为空
 //	printf("%s\n",*order);
 	//for(i=0;i<count-1;i++){printf("%s\n",para[i]);}
 //	printf("%d \n",count);
@@ -318,19 +531,22 @@ void display_on_screen(char *prompt){// [yaush]用户@主机名：路径$
 	int l;
 	pwd =getpwuid(getuid());//用户名
 	getcwd(pathname,1024);//路径
-
+	
+	sprintf(prompt,"\001\033[49;31;1m\002[yaush]\001\033[0m\002");//[yaush] read
+	l = strlen(prompt);
+	 
 	if(gethostname(hostname,256)==0)//获得用户名和主机名
-		sprintf(prompt,"[yaush]%s@%s:",pwd->pw_name,hostname);
+		sprintf(prompt+l,"\001\033[49;32;1m\002%s@%s:\001\033[0m\002",pwd->pw_name,hostname);//green 32
 	else
-		sprintf(prompt,"[yaush]%s@unknown:",pwd->pw_name);
+		sprintf(prompt+l,"\001\033[49;32;1m\002%s@unknown:\001\033[0m\002",pwd->pw_name);
 
 	l = strlen(prompt);
 
 	if(strlen(pathname) < strlen(pwd->pw_dir) || strncmp(pathname,pwd->pw_dir,
 	   strlen(pwd->pw_dir))!=0)//获得路径
-		sprintf(prompt+l,"%s",pathname);//此目录为home目录，home路径不省略
+		sprintf(prompt+l,"\001\033[49;34;1m\002%s\001\033[0m\002",pathname);//此目录为home目录，home路径不省略,34 blu
 	else
-		sprintf(prompt+l,"~%s",pathname+strlen(pwd->pw_dir));//省略home路径
+		sprintf(prompt+l,"\001\033[49;34;1m\002~%s\001\033[0m\002",pathname+strlen(pwd->pw_dir));//省略home路径
 
 	l=strlen(prompt);
 
